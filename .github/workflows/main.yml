@@ -8,14 +8,16 @@ permissions:
 
 jobs:
   build-panvk:
+    name: Build PanVK Android ARM64
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git build-essential \
+            git wget unzip \
+            build-essential \
             python3 python3-pip \
             python3-mako python3-yaml \
             ninja-build meson pkg-config \
@@ -29,11 +31,19 @@ jobs:
             glslang-tools spirv-tools \
             zlib1g-dev rustc cargo
 
+      - name: Upgrade Meson
+        run: |
+          python3 -m pip install \
+            --break-system-packages \
+            "meson>=1.4.0,<2"
+          meson --version
+
       - name: Install Android NDK
         run: |
-          wget -q https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+          wget -q \
+            https://dl.google.com/android/repository/android-ndk-r29-linux.zip
           unzip -q android-ndk-r29-linux.zip
-          echo "$GITHUB_WORKSPACE/android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+          echo "$GITHUB_WORKSPACE/android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Download FristOneRR source
         run: |
@@ -60,7 +70,7 @@ jobs:
 
           [properties]
           needs_exe_wrapper = true
-          platform_sdk_version = 30
+          platform-sdk-version = 30
           EOF
 
       - name: Configure Android build
@@ -79,15 +89,30 @@ jobs:
         run: |
           ninja -C build-android -j2
 
-      - name: Check driver
+      - name: Check compiled library
         working-directory: mesa
         run: |
+          find build-android -name 'libvulkan_panfrost.so' -print
           test -f build-android/src/panfrost/vulkan/libvulkan_panfrost.so
           file build-android/src/panfrost/vulkan/libvulkan_panfrost.so
 
-      - name: Upload compiled library
+      - name: Package driver
+        working-directory: mesa
+        run: |
+          mkdir -p ../PanVK-Android-ARM64
+          cp build-android/src/panfrost/vulkan/libvulkan_panfrost.so \
+            ../PanVK-Android-ARM64/
+          cp tools/fristonerr/build-options.txt \
+            ../PanVK-Android-ARM64/
+          cp LICENSE \
+            ../PanVK-Android-ARM64/
+
+          cd ..
+          zip -r PanVK-FristOneRR-Android-ARM64.zip \
+            PanVK-Android-ARM64
+
+      - name: Upload driver ZIP
         uses: actions/upload-artifact@v4
         with:
           name: PanVK-FristOneRR-Android-ARM64
-          path: mesa/build-android/src/panfrost/vulkan/libvulkan_panfrost.so
-          if-no-files-found: error
+          path
