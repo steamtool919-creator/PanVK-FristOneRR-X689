@@ -10,57 +10,49 @@ jobs:
   build-panvk:
     name: Build PanVK Android ARM64
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
 
     steps:
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git wget unzip \
-            build-essential \
-            python3 python3-pip \
-            python3-mako python3-yaml \
-            ninja-build meson pkg-config \
-            bison flex cmake \
-            libdrm-dev libelf-dev \
-            libexpat1-dev libwayland-dev \
-            libx11-dev libxext-dev \
-            libxrandr-dev libxcb1-dev \
-            libvulkan-dev libclang-dev \
-            clang llvm lld \
-            glslang-tools spirv-tools \
-            zlib1g-dev rustc cargo
+            git wget unzip zip file \
+            build-essential python3 python3-pip python3-mako python3-yaml \
+            ninja-build pkg-config bison flex cmake \
+            libdrm-dev libelf-dev libexpat1-dev libwayland-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcb1-dev \
+            libvulkan-dev libclang-dev clang llvm lld \
+            glslang-tools spirv-tools zlib1g-dev rustc cargo
 
-      - name: Upgrade Meson
+      - name: Install Meson
         run: |
-          python3 -m pip install \
-            --break-system-packages \
-            "meson>=1.4.0,<2"
-          meson --version
+          python3 -m pip install --user --break-system-packages "meson>=1.4.0,<2"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/meson" --version
 
       - name: Install Android NDK
         run: |
-          wget -q \
-            https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+          wget -q https://dl.google.com/android/repository/android-ndk-r29-linux.zip
           unzip -q android-ndk-r29-linux.zip
           echo "$GITHUB_WORKSPACE/android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_NDK_ROOT=$GITHUB_WORKSPACE/android-ndk-r29" >> "$GITHUB_ENV"
 
       - name: Download FristOneRR source
         run: |
-          git clone --depth 1 \
-            https://github.com/FristOneRR-Admin/FristOneRR-Panvk-Source.git \
-            mesa
+          git clone --depth 1 https://github.com/FristOneRR-Admin/FristOneRR-Panvk-Source.git mesa
 
       - name: Prepare Android cross file
         working-directory: mesa
         run: |
-          cat > android-cross-github.txt <<'EOF'
+          NDK="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cat > android-cross-github.txt <<EOF
           [binaries]
-          c = ['clang', '--target=aarch64-linux-android30']
-          cpp = ['clang++', '--target=aarch64-linux-android30']
-          ar = 'llvm-ar'
-          strip = 'llvm-strip'
-          pkg-config = 'pkg-config'
+          c = ['$NDK/aarch64-linux-android30-clang', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables']
+          cpp = ['$NDK/aarch64-linux-android30-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++']
+          ar = '$NDK/llvm-ar'
+          strip = '$NDK/llvm-strip'
+          pkg-config = '/usr/bin/pkg-config'
 
           [host_machine]
           system = 'android'
@@ -70,48 +62,42 @@ jobs:
 
           [properties]
           needs_exe_wrapper = true
-          platform-sdk-version = 30
+          platform-sdk-version = '30'
           EOF
 
       - name: Configure Android build
         working-directory: mesa
+        shell: bash
         run: |
-          sed 's/-Dplatform-sdk-version=35/-Dplatform-sdk-version=30/' \
-            tools/fristonerr/build-options.txt > android-options.txt
-
-          meson setup build-android \
-            --cross-file android-cross-github.txt \
-            $(cat android-options.txt) \
-            -Dmesa-clc=disabled
+          set -euxo pipefail
+          mapfile -t MESON_OPTIONS < <(grep -vE '^[[:space:]]*(#|$)' tools/fristonerr/build-options.txt)
+          meson setup build-android             --cross-file android-cross-github.txt             "${MESON_OPTIONS[@]}"             -Dplatform-sdk-version=30             -Dmesa-clc=enabled             -Dprecomp-compiler=enabled
 
       - name: Compile PanVK
         working-directory: mesa
         run: |
           ninja -C build-android -j2
 
-      - name: Check compiled library
+      - name: Locate and verify Vulkan library
         working-directory: mesa
+        shell: bash
         run: |
-          find build-android -name 'libvulkan_panfrost.so' -print
-          test -f build-android/src/panfrost/vulkan/libvulkan_panfrost.so
-          file build-android/src/panfrost/vulkan/libvulkan_panfrost.so
+          set -euxo pipefail
+          DRIVER="$(find build-android -type f -name 'libvulkan_panfrost.so' -print -quit)"
+          test -n "$DRIVER"
+          file "$DRIVER"
+          readelf -h "$DRIVER" | grep -E 'Class:|Machine:'
+          mkdir -p ../PanVK-Android-ARM64
+          cp "$DRIVER" ../PanVK-Android-ARM64/
+          cp LICENSE ../PanVK-Android-ARM64/
+          cp tools/fristonerr/build-options.txt ../PanVK-Android-ARM64/
+          printf '%s\n' 'Experimental build. Not validated on Infinix X689 / Mali-G52 MC2. Keep original driver for rollback.' > ../PanVK-Android-ARM64/README-TESTING.txt
 
       - name: Package driver
-        working-directory: mesa
         run: |
-          mkdir -p ../PanVK-Android-ARM64
-          cp build-android/src/panfrost/vulkan/libvulkan_panfrost.so \
-            ../PanVK-Android-ARM64/
-          cp tools/fristonerr/build-options.txt \
-            ../PanVK-Android-ARM64/
-          cp LICENSE \
-            ../PanVK-Android-ARM64/
+          zip -r PanVK-FristOneRR-Android-ARM64.zip PanVK-Android-ARM64
 
-          cd ..
-          zip -r PanVK-FristOneRR-Android-ARM64.zip \
-            PanVK-Android-ARM64
-
-      - name: Upload driver ZIP
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: PanVK-FristOneRR-Android-ARM64
