@@ -1,0 +1,93 @@
+name: PanVK FristOneRR Android ARM64 Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-panvk:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git build-essential \
+            python3 python3-pip \
+            python3-mako python3-yaml \
+            ninja-build meson pkg-config \
+            bison flex cmake \
+            libdrm-dev libelf-dev \
+            libexpat1-dev libwayland-dev \
+            libx11-dev libxext-dev \
+            libxrandr-dev libxcb1-dev \
+            libvulkan-dev libclang-dev \
+            clang llvm lld \
+            glslang-tools spirv-tools \
+            zlib1g-dev rustc cargo
+
+      - name: Install Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+          unzip -q android-ndk-r29-linux.zip
+          echo "$GITHUB_WORKSPACE/android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: Download FristOneRR source
+        run: |
+          git clone --depth 1 \
+            https://github.com/FristOneRR-Admin/FristOneRR-Panvk-Source.git \
+            mesa
+
+      - name: Prepare Android cross file
+        working-directory: mesa
+        run: |
+          cat > android-cross-github.txt <<'EOF'
+          [binaries]
+          c = ['clang', '--target=aarch64-linux-android30']
+          cpp = ['clang++', '--target=aarch64-linux-android30']
+          ar = 'llvm-ar'
+          strip = 'llvm-strip'
+          pkg-config = 'pkg-config'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8-a'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+          platform_sdk_version = 30
+          EOF
+
+      - name: Configure Android build
+        working-directory: mesa
+        run: |
+          sed 's/-Dplatform-sdk-version=35/-Dplatform-sdk-version=30/' \
+            tools/fristonerr/build-options.txt > android-options.txt
+
+          meson setup build-android \
+            --cross-file android-cross-github.txt \
+            $(cat android-options.txt) \
+            -Dmesa-clc=disabled
+
+      - name: Compile PanVK
+        working-directory: mesa
+        run: |
+          ninja -C build-android -j2
+
+      - name: Check driver
+        working-directory: mesa
+        run: |
+          test -f build-android/src/panfrost/vulkan/libvulkan_panfrost.so
+          file build-android/src/panfrost/vulkan/libvulkan_panfrost.so
+
+      - name: Upload compiled library
+        uses: actions/upload-artifact@v4
+        with:
+          name: PanVK-FristOneRR-Android-ARM64
+          path: mesa/build-android/src/panfrost/vulkan/libvulkan_panfrost.so
+          if-no-files-found: error
