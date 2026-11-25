@@ -137,7 +137,7 @@ jobs:
               s = s.replace(guard, guard + typedef, 1)
           if "typedef struct _drmDevice *drmDevicePtr;" not in s:
               raise SystemExit("Android drmDevicePtr declaration patch verification failed")
-          if "\\n" in s:
+          if r"\\n" in s:
               raise SystemExit("Detected literal escaped-newline corruption in header")
           p.write_text(s)
           print("Verified Android drmDevicePtr forward declaration")
@@ -181,7 +181,7 @@ jobs:
               raise SystemExit("Expected force_sync syncobj block not found; refusing patch")
           replacement = "#ifndef __ANDROID__\n" + match.group(0) + "\n#endif"
           s = s[:match.start()] + replacement + s[match.end():]
-          if "\\n" in s:
+          if r"\\n" in s:
               raise SystemExit("Detected literal escaped-newline corruption; refusing patched source")
           if "#ifndef __ANDROID__" not in s or "#endif" not in s:
               raise SystemExit("Android guard verification failed")
@@ -372,7 +372,7 @@ jobs:
           EOF
 
 
-      - name: Make PanVK instance DRM discovery declarations Android-safe (V36)
+      - name: Repair PanVK instance Android include patch
         working-directory: mesa
         shell: bash
         run: |
@@ -381,25 +381,21 @@ jobs:
           from pathlib import Path
           p = Path("src/panfrost/vulkan/panvk_instance.c")
           s = p.read_text()
-          # Android cross-build currently uses libdrm headers available in the build
-          # environment. Add the public declarations explicitly, rather than
-          # fabricating drmDevice fields or replacing discovery with a stub.
-          marker = "#include <xf86drm.h>"
-          if marker not in s:
-              includes = s.find("#include")
-              if includes < 0:
-                  raise SystemExit("No include section found in panvk_instance.c")
-              # Add the libdrm public header near the top of the include section.
-              s = s[:includes] + marker + "\\n" + s[includes:]
-          if "#include <xf86drm.h>" not in s:
-              raise SystemExit("xf86drm declaration include patch failed")
+          # Repair the malformed literal escape inserted by the previous workflow.
+          malformed = r'#include <xf86drm.h>\\n#include "util/build_id.h"'
+          if malformed in s:
+              s = s.replace(malformed, '#include "util/build_id.h"', 1)
+          # Remove any standalone host libdrm header added by this workflow.
+          s = s.replace("#include <xf86drm.h>\\n", "")
+          s = s.replace("#include <xf86drm.h>", "")
+          if r"\\n" in s:
+              raise SystemExit("Unexpected literal \\n sequence remains in panvk_instance.c")
+          if '#include "util/build_id.h"' not in s:
+              raise SystemExit('util/build_id.h include missing after repair; refusing to continue')
           p.write_text(s)
-          print("Added explicit libdrm device discovery declarations")
+          print("Repaired panvk_instance.c include corruption and removed host-only libdrm include")
           PYPATCH
-
-          # Validate the include is available to the Android compiler's header search path.
-          test -f /usr/include/xf86drm.h
-          test -f /usr/include/libdrm/drm.h
+          sed -n '1,30p' src/panfrost/vulkan/panvk_instance.c
 
       - name: Configure Android PanVK build
         working-directory: mesa
