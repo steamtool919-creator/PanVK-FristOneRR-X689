@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V34)
+name: PanVK FristOneRR Android ARM64 Build (V35)
 
 on:
   workflow_dispatch:
@@ -404,6 +404,29 @@ jobs:
             -Dglx=disabled \
             -Degl=disabled \
             -Dgbm=disabled
+
+      - name: Make PanVK queue syncobj calls Android-safe
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PYPATCH'
+          from pathlib import Path
+          p = Path("src/panfrost/vulkan/panvk_bind_queue.c")
+          s = p.read_text()
+          # Guard the libdrm syncobj API calls, unavailable in the Android headers
+          # used by this KBase-targeted build.
+          create = "int ret = drmSyncobjCreate(dev->drm_fd, 0, &queue->syncobj_handle);"
+          destroy = "drmSyncobjDestroy(dev->drm_fd, queue->syncobj_handle);"
+          if create not in s or destroy not in s:
+              raise SystemExit("Expected syncobj create/destroy calls not found; refusing patch")
+          s = s.replace(create, "#ifndef __ANDROID__\n" + create + "\n#else\nint ret = 0;\nqueue->syncobj_handle = 0;\n#endif", 1)
+          s = s.replace(destroy, "#ifndef __ANDROID__\n" + destroy + "\n#endif", 1)
+          if s.count("drmSyncobjCreate(dev->drm_fd") != 1 or s.count("drmSyncobjDestroy(dev->drm_fd") != 1:
+              raise SystemExit("Syncobj call patch verification failed")
+          p.write_text(s)
+          print("Guarded PanVK queue syncobj calls for Android")
+          PYPATCH
 
       - name: Compile Android PanVK
         working-directory: mesa
