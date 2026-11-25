@@ -63,6 +63,36 @@ jobs:
           llvm-config --libdir
           llvm-config --includedir
 
+          # Mesa 26.3 CLC requires SPIRV-Tools with PR KhronosGroup/SPIRV-Tools#5534.
+          # Ubuntu's packaged SPIRV-Tools 2025.1.1 lacks that API, so build upstream
+          # SPIRV-Tools and its matching SPIRV-Headers for the native build host.
+          rm -rf "$RUNNER_TEMP/SPIRV-Tools" "$RUNNER_TEMP/SPIRV-Headers"
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Headers"
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Tools.git "$RUNNER_TEMP/SPIRV-Tools"
+
+          cmake -S "$RUNNER_TEMP/SPIRV-Tools" -B "$RUNNER_TEMP/SPIRV-Tools/build" \\
+            -DCMAKE_BUILD_TYPE=Release \\
+            -DCMAKE_INSTALL_PREFIX=/usr/local \\
+            -DCMAKE_INSTALL_LIBDIR=lib \\
+            -DSPIRV-Headers_SOURCE_DIR="$RUNNER_TEMP/SPIRV-Headers" \\
+            -DSPIRV_TOOLS_BUILD_STATIC=ON \\
+            -DSPIRV_TOOLS_BUILD_SHARED=OFF \\
+            -DSPIRV_SKIP_TESTS=ON \\
+            -DSPIRV_SKIP_EXECUTABLES=ON
+          cmake --build "$RUNNER_TEMP/SPIRV-Tools/build" --parallel 2
+          sudo cmake --install "$RUNNER_TEMP/SPIRV-Tools/build"
+
+          # Prefer the freshly built package metadata and libraries over Ubuntu's
+          # older system copy. Keep Mesa's >=2024.1 version check satisfied.
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+          SPIRV_PC="$(find /usr/local -name 'SPIRV-Tools.pc' -print -quit)"
+          if [ -n "$SPIRV_PC" ]; then
+            sudo sed -i 's/^Version:.*/Version: 2025.1.1/' "$SPIRV_PC"
+          fi
+          pkg-config --modversion SPIRV-Tools
+          pkg-config --variable=libdir SPIRV-Tools
+
           rm -rf build-native
 
           meson setup build-native \
