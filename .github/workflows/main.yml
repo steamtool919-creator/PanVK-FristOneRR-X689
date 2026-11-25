@@ -66,18 +66,17 @@ jobs:
           # Mesa 26.3 CLC requires SPIRV-Tools with PR KhronosGroup/SPIRV-Tools#5534.
           # Ubuntu's packaged SPIRV-Tools 2025.1.1 lacks that API, so build upstream
           # SPIRV-Tools and its matching SPIRV-Headers for the native build host.
-          rm -rf "$RUNNER_TEMP/SPIRV-Tools" "$RUNNER_TEMP/SPIRV-Headers"
-          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Headers"
+          rm -rf "$RUNNER_TEMP/SPIRV-Tools"
           git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Tools.git "$RUNNER_TEMP/SPIRV-Tools"
+          git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Tools/external/spirv-headers"
 
-          cmake -S "$RUNNER_TEMP/SPIRV-Tools" -B "$RUNNER_TEMP/SPIRV-Tools/build" \\
-            -DCMAKE_BUILD_TYPE=Release \\
-            -DCMAKE_INSTALL_PREFIX=/usr/local \\
-            -DCMAKE_INSTALL_LIBDIR=lib \\
-            -DSPIRV-Headers_SOURCE_DIR="$RUNNER_TEMP/SPIRV-Headers" \\
-            -DSPIRV_TOOLS_BUILD_STATIC=ON \\
-            -DSPIRV_TOOLS_BUILD_SHARED=OFF \\
-            -DSPIRV_SKIP_TESTS=ON \\
+          cmake -S "$RUNNER_TEMP/SPIRV-Tools" -B "$RUNNER_TEMP/SPIRV-Tools/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DSPIRV_TOOLS_BUILD_STATIC=ON \
+            -DSPIRV_TOOLS_BUILD_SHARED=OFF \
+            -DSPIRV_SKIP_TESTS=ON \
             -DSPIRV_SKIP_EXECUTABLES=ON
           cmake --build "$RUNNER_TEMP/SPIRV-Tools/build" --parallel 2
           sudo cmake --install "$RUNNER_TEMP/SPIRV-Tools/build"
