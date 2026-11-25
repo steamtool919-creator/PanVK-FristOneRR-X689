@@ -128,14 +128,21 @@ jobs:
           from pathlib import Path
           p = Path("src/panfrost/vulkan/panvk_physical_device.h")
           s = p.read_text()
-          marker = "drmDevicePtr drm_device"
-          if marker not in s:
-              raise SystemExit("Expected drmDevicePtr parameter not found")
+          typedef = "#ifdef __ANDROID__\ntypedef struct _drmDevice *drmDevicePtr;\n#endif\n"
+          # Add a forward declaration immediately after the include guard, only once.
+          guard = "#define PANVK_PHYSICAL_DEVICE_H\n"
           if "typedef struct _drmDevice *drmDevicePtr;" not in s:
-              s = s.replace("#include", "#ifdef __ANDROID__\\ntypedef struct _drmDevice *drmDevicePtr;\\n#endif\\n#include", 1)
+              if guard not in s:
+                  raise SystemExit("Header guard marker missing; refusing to patch")
+              s = s.replace(guard, guard + typedef, 1)
+          if "typedef struct _drmDevice *drmDevicePtr;" not in s:
+              raise SystemExit("Android drmDevicePtr declaration patch verification failed")
+          if "\\n" in s:
+              raise SystemExit("Detected literal escaped-newline corruption in header")
           p.write_text(s)
-          print("Android opaque drmDevicePtr declaration added")
+          print("Verified Android drmDevicePtr forward declaration")
           PYPATCH
+          sed -n '1,18p' src/panfrost/vulkan/panvk_physical_device.h
 
       - name: Build native PanVK shader tools
         working-directory: mesa
