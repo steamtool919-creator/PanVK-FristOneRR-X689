@@ -68,7 +68,25 @@ jobs:
           # SPIRV-Tools and its matching SPIRV-Headers for the native build host.
           rm -rf "$RUNNER_TEMP/SPIRV-Tools"
           git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Tools.git "$RUNNER_TEMP/SPIRV-Tools"
+          # Required API is supplied by KhronosGroup/SPIRV-Tools PR 5534;
+          # it is not guaranteed to exist on the repository's default branch.
+          git -C "$RUNNER_TEMP/SPIRV-Tools" fetch --depth=1 origin pull/5534/head
+          git -C "$RUNNER_TEMP/SPIRV-Tools" checkout FETCH_HEAD
           git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Tools/external/spirv-headers"
+          grep -n "SetAllowPtrTypeMismatch" "$RUNNER_TEMP/SPIRV-Tools/include/spirv-tools/linker.hpp"
+
+          # Mesa's CLC feature test uses Clang-only warning flags. GCC 13
+          # rejects these unknown warning options, so omit them for GCC.
+          python3 - <<'PY'
+          from pathlib import Path
+          meson_file = Path("src/compiler/clc/meson.build")
+          text = meson_file.read_text()
+          old = "  args : ['-Wno-error=unguarded-availability', '-Wno-error=unguarded-availability-new'],"
+          new = "  args : cpp.get_id() == 'clang' ? ['-Wno-error=unguarded-availability', '-Wno-error=unguarded-availability-new'] : [],"
+          if old not in text:
+              raise SystemExit("Expected CLC feature-test args not found; refusing unsafe patch")
+          meson_file.write_text(text.replace(old, new, 1))
+          PY
 
           cmake -S "$RUNNER_TEMP/SPIRV-Tools" -B "$RUNNER_TEMP/SPIRV-Tools/build" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -85,10 +103,6 @@ jobs:
           # older system copy. Keep Mesa's >=2024.1 version check satisfied.
           export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH:-}"
           echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
-          SPIRV_PC="$(find /usr/local -name 'SPIRV-Tools.pc' -print -quit)"
-          if [ -n "$SPIRV_PC" ]; then
-            sudo sed -i 's/^Version:.*/Version: 2025.1.1/' "$SPIRV_PC"
-          fi
           pkg-config --modversion SPIRV-Tools
           pkg-config --variable=libdir SPIRV-Tools
 
