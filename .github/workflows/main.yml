@@ -23,7 +23,8 @@ jobs:
             libdrm-dev libelf-dev libexpat1-dev libwayland-dev \
             libx11-dev libxext-dev libxrandr-dev libxcb1-dev \
             libvulkan-dev libclang-dev clang llvm lld \
-            glslang-tools spirv-tools zlib1g-dev rustc cargo
+            glslang-tools spirv-tools zlib1g-dev rustc cargo \\
+            libclc-18-dev
 
       - name: Install Meson
         run: |
@@ -70,6 +71,12 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
+          pkg-config --modversion libclc || {
+            echo "libclc pkg-config metadata is missing; inspect installed libclc packages."
+            find /usr -iname '*libclc*.pc' -o -iname '*clc*.pc' 2>/dev/null | head -50
+            exit 1
+          }
 
           python3 - <<'PY'
           import shlex
