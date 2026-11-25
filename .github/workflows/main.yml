@@ -65,6 +65,15 @@ jobs:
           end = s.index("err_unlock:", start)
           drmblock = s[start:end]
           s = s[:start] + "#ifdef __ANDROID__\n   /* KBase uses bo_import_fd above; DRM fallback is Linux-only. */\n   goto err_unlock;\n#else\n" + drmblock + "#endif\n\n" + s[end:]
+          # Make out_unlock shared by the Android KBase import path and Linux DRM fallback.
+          # The label was previously inside a fallback section excluded on Android.
+          if "out_unlock:\n   simple_mtx_unlock" not in s:
+              raise SystemExit("Expected out_unlock label/unlock block not found")
+          s = s.replace("out_unlock:\n   simple_mtx_unlock", "simple_mtx_unlock", 1)
+          marker = "   simple_mtx_unlock(&dev->handle_to_bo.lock);\n\n   return bo;"
+          if marker not in s:
+              raise SystemExit("Expected common unlock/return block not found")
+          s = s.replace(marker, "out_unlock:\n" + marker, 1)
           p.write_text(s)
           p = Path("src/panfrost/lib/kmod/meson.build")
           s = p.read_text()
