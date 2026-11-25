@@ -94,6 +94,28 @@ jobs:
           echo "Using SPIRV-Headers revision $SPIRV_HEADERS_REV"
           grep -n "SetAllowPtrTypeMismatch" "$RUNNER_TEMP/SPIRV-Tools/include/spirv-tools/linker.hpp"
 
+          # This source adds -llog globally, but Android's liblog does not
+          # exist on the Ubuntu x86_64 build host. Keep it only for Android
+          # target builds; the Android cross build below will still link it.
+          python3 - <<'PYLOG'
+          from pathlib import Path
+          meson_file = Path("meson.build")
+          text = meson_file.read_text()
+          old = """add_project_link_arguments(
+            '-llog',
+            language : ['c', 'cpp'],
+          )"""
+          new = """if host_machine.system() == 'android'
+            add_project_link_arguments(
+              '-llog',
+              language : ['c', 'cpp'],
+            )
+          endif"""
+          if old not in text:
+              raise SystemExit("Expected global -llog block not found; refusing unsafe patch")
+          meson_file.write_text(text.replace(old, new, 1))
+          PYLOG
+
           # Mesa's CLC feature test uses Clang-only warning flags. GCC 13
           # rejects these unknown warning options, so omit them for GCC.
           python3 - <<'PY'
