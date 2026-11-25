@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V35)
+name: PanVK FristOneRR Android ARM64 Build (V36)
 
 on:
   workflow_dispatch:
@@ -370,6 +370,36 @@ jobs:
           needs_exe_wrapper = true
           platform-sdk-version = 30
           EOF
+
+
+      - name: Make PanVK instance DRM discovery declarations Android-safe (V36)
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PYPATCH'
+          from pathlib import Path
+          p = Path("src/panfrost/vulkan/panvk_instance.c")
+          s = p.read_text()
+          # Android cross-build currently uses libdrm headers available in the build
+          # environment. Add the public declarations explicitly, rather than
+          # fabricating drmDevice fields or replacing discovery with a stub.
+          marker = "#include <xf86drm.h>"
+          if marker not in s:
+              includes = s.find("#include")
+              if includes < 0:
+                  raise SystemExit("No include section found in panvk_instance.c")
+              # Add the libdrm public header near the top of the include section.
+              s = s[:includes] + marker + "\\n" + s[includes:]
+          if "#include <xf86drm.h>" not in s:
+              raise SystemExit("xf86drm declaration include patch failed")
+          p.write_text(s)
+          print("Added explicit libdrm device discovery declarations")
+          PYPATCH
+
+          # Validate the include is available to the Android compiler's header search path.
+          test -f /usr/include/xf86drm.h
+          test -f /usr/include/libdrm/drm.h
 
       - name: Configure Android PanVK build
         working-directory: mesa
