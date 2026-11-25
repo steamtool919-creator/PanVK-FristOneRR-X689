@@ -22,7 +22,7 @@ jobs:
             ninja-build pkg-config bison flex cmake \
             libdrm-dev libelf-dev libexpat1-dev libwayland-dev \
             libx11-dev libxext-dev libxrandr-dev libxcb1-dev \
-            libvulkan-dev libclang-dev clang llvm llvm-dev lld \
+            libvulkan-dev libclang-18-dev clang-18 llvm-18-dev llvm-18-tools lld \
             glslang-tools spirv-tools zlib1g-dev rustc cargo \
             libclc-18-dev
 
@@ -36,6 +36,12 @@ jobs:
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r29-linux.zip
           unzip -q android-ndk-r29-linux.zip
+          # Keep Android NDK tools available, but force Meson to use Ubuntu's
+          # native LLVM 18 config tool rather than the NDK's llvm-config.
+          mkdir -p "$HOME/native-llvm-bin"
+          printf '#!/usr/bin/env bash\\nexec /usr/bin/llvm-config-18 "$@"\\n' > "$HOME/native-llvm-bin/llvm-config"
+          chmod +x "$HOME/native-llvm-bin/llvm-config"
+          echo "$HOME/native-llvm-bin" >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
           echo "ANDROID_NDK_ROOT=$GITHUB_WORKSPACE/android-ndk-r29" >> "$GITHUB_ENV"
 
@@ -78,14 +84,11 @@ jobs:
             exit 1
           }
 
-          if ! command -v llvm-config >/dev/null 2>&1; then
-            echo "ERROR: llvm-config is missing. The llvm-dev package should provide it."
-            find /usr/bin -maxdepth 1 -name 'llvm-config*' -print
-            exit 1
-          fi
-
-          llvm-config --version
-          llvm-config --components | grep -E '(^| )(bitwriter|engine|mcdisassembler|mcjit|core|executionengine|scalaropts|transformutils|instcombine|coverage|target|linker|irreader|option|libdriver|lto|native)( |$)' || true
+          test -x "$HOME/native-llvm-bin/llvm-config"
+          test "$("$HOME/native-llvm-bin/llvm-config" --version | cut -d. -f1)" = "18"
+          "$HOME/native-llvm-bin/llvm-config" --version
+          "$HOME/native-llvm-bin/llvm-config" --libdir
+          "$HOME/native-llvm-bin/llvm-config" --includedir
 
           python3 - <<'PY'
           import shlex
@@ -93,14 +96,32 @@ jobs:
 
           raw = Path("tools/fristonerr/build-options.txt").read_text()
           args = shlex.split(raw)
+          # Drop source preset entries for unrelated Windows, AMD, Intel,
+          # Freedreno, and x86-only build targets. Keep the Panfrost kbase
+          # target and the Android platform settings.
+          irrelevant_prefixes = (
+              "-Dmesa-clc=",
+              "-Dprecomp-compiler=",
+              "-Dplatform-sdk-version=",
+              "-Dsplit-debug=",
+              "-Damd-use-llvm=",
+              "-Dintel-elk=",
+              "-Dsse2=",
+              "-Dfreedreno-kmds=",
+              "-Dgallium-wgl-dll-name=",
+              "-Dgallium-d3d10-dll-name=",
+              "-Dmediafoundation-",
+              "-Dgallium-mediafoundation-",
+              "-Dgallium-d3d10umd=",
+              "-Dmin-windows-version=",
+              "-Dradv-",
+              "-Dbuild-radv-",
+              "-Dbuild-aco-",
+              "-Dinstall-intel-",
+          )
           filtered = [
               arg for arg in args
-              if not arg.startswith((
-                  "-Dmesa-clc=",
-                  "-Dprecomp-compiler=",
-                  "-Dplatform-sdk-version=",
-                  "-Dsplit-debug=",
-              ))
+              if not arg.startswith(irrelevant_prefixes)
           ]
           Path("meson-options.txt").write_text("\n".join(filtered))
           PY
@@ -110,6 +131,7 @@ jobs:
             --cross-file android-cross-github.txt \
             "${MESON_OPTIONS[@]}" \
             -Dplatform-sdk-version=30 \
+            -Ddraw-use-llvm=false \
             -Dmesa-clc=auto \
             -Dprecomp-compiler=auto
 
