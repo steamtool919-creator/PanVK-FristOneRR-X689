@@ -220,6 +220,12 @@ jobs:
           cpu = 'armv8-a'
           endian = 'little'
 
+          [built-in options]
+          # pan_kmod.c uses libdrm's public headers; Debian's libdrm-dev
+          # installs xf86drm.h and drm.h under this include directory.
+          c_args = ['-I/usr/include/libdrm']
+          cpp_args = ['-I/usr/include/libdrm']
+
           [properties]
           needs_exe_wrapper = true
           platform-sdk-version = 30
