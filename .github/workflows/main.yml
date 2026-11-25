@@ -72,11 +72,26 @@ jobs:
           # it is not guaranteed to exist on the repository's default branch.
           git -C "$RUNNER_TEMP/SPIRV-Tools" fetch --depth=1 origin pull/5534/head
           git -C "$RUNNER_TEMP/SPIRV-Tools" checkout FETCH_HEAD
-          # Use the exact SPIRV-Headers commit pinned by this SPIRV-Tools PR.
-          # Cloning the current HEAD independently causes generated opcode tables
-          # and the SPIRV-Headers enums to come from incompatible revisions.
-          git -C "$RUNNER_TEMP/SPIRV-Tools" submodule sync --recursive
-          git -C "$RUNNER_TEMP/SPIRV-Tools" submodule update --init --recursive --depth 1
+          # SPIRV-Tools records its matching SPIRV-Headers revision in DEPS.
+          # It is a DEPS-managed dependency, not a Git submodule, so
+          # `git submodule update` alone does not populate external/spirv-headers.
+          SPIRV_HEADERS_REV="$(python3 - <<'PYDEPS'
+          import os
+          import re
+          from pathlib import Path
+          deps = (Path(os.environ["RUNNER_TEMP"]) / "SPIRV-Tools" / "DEPS").read_text()
+          match = re.search(r"spirv_headers_revision\s*['\"]?\s*:\s*['\"]([0-9a-f]{40})['\"]", deps)
+          if not match:
+              raise SystemExit("Could not find pinned spirv_headers_revision in SPIRV-Tools/DEPS")
+          print(match.group(1))
+          PYDEPS
+          )"
+          test "${#SPIRV_HEADERS_REV}" -eq 40
+          git clone https://github.com/KhronosGroup/SPIRV-Headers.git "$RUNNER_TEMP/SPIRV-Tools/external/spirv-headers"
+          git -C "$RUNNER_TEMP/SPIRV-Tools/external/spirv-headers" fetch --depth=1 origin "$SPIRV_HEADERS_REV"
+          git -C "$RUNNER_TEMP/SPIRV-Tools/external/spirv-headers" checkout FETCH_HEAD
+          test -f "$RUNNER_TEMP/SPIRV-Tools/external/spirv-headers/include/spirv/unified1/spirv.h"
+          echo "Using SPIRV-Headers revision $SPIRV_HEADERS_REV"
           grep -n "SetAllowPtrTypeMismatch" "$RUNNER_TEMP/SPIRV-Tools/include/spirv-tools/linker.hpp"
 
           # Mesa's CLC feature test uses Clang-only warning flags. GCC 13
