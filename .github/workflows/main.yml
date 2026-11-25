@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V31)
+name: PanVK FristOneRR Android ARM64 Build (V32)
 
 on:
   workflow_dispatch:
@@ -162,6 +162,45 @@ jobs:
               raise SystemExit("xf86drm.h removal verification failed")
           p.write_text(s)
           print("Removed unused host-only libdrm header from pan_perf.c")
+          PYPATCH
+
+
+      - name: Make PanVK async bind syncobj Android-safe
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PYPATCH'
+          from pathlib import Path
+          p = Path("src/panfrost/vulkan/panvk_async_bind.c")
+          s = p.read_text()
+          old = """   if (submit->force_sync) {
+      ASSERTED int ret = drmSyncobjWait(device->drm_fd,
+                               &submit->syncobj_handle, 1, INT64_MAX,
+                               DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, NULL);
+      assert(!ret);
+
+      drmSyncobjReset(device->drm_fd, &submit->syncobj_handle, 1);
+   }"""
+          new = """#ifndef __ANDROID__
+   if (submit->force_sync) {
+      ASSERTED int ret = drmSyncobjWait(device->drm_fd,
+                               &submit->syncobj_handle, 1, INT64_MAX,
+                               DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, NULL);
+      assert(!ret);
+
+      drmSyncobjReset(device->drm_fd, &submit->syncobj_handle, 1);
+   }
+#else
+   /* Android KBase path: DRM syncobj wait/reset is unavailable here. */
+#endif"""
+          if old not in s:
+              raise SystemExit("Expected force_sync DRM syncobj block not found; refusing patch")
+          s = s.replace(old, new, 1)
+          if "drmSyncobjWait" not in s:
+              raise SystemExit("Unexpected patch result: DRM wait symbol absent")
+          p.write_text(s)
+          print("Android guarded DRM syncobj wait/reset in async bind")
           PYPATCH
 
       - name: Build native PanVK shader tools
