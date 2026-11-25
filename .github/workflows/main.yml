@@ -46,7 +46,7 @@ jobs:
         working-directory: mesa
         run: |
           NDK="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          cat > android-cross-github.txt <<'EOF'
+          cat > android-cross-github.txt <<EOF
           [binaries]
           c = ['$NDK/aarch64-linux-android30-clang', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables']
           cpp = ['$NDK/aarch64-linux-android30-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++']
