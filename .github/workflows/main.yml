@@ -21,7 +21,7 @@ jobs:
             python3 python3-pip python3-mako python3-yaml \
             ninja-build pkg-config bison flex cmake \
             libdrm-dev libelf-dev libexpat1-dev libwayland-dev \
-            libx11-dev libxext-dev libxrandr-dev libxcb1-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcb1-dev libxcb-randr0-dev \
             libvulkan-dev libclang-18-dev clang-18 llvm-18-dev llvm-18-tools lld \
             libclc-18-dev libllvmspirvlib-18-dev \
             glslang-tools spirv-tools zlib1g-dev rustc cargo
