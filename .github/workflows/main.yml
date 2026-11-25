@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V36)
+name: PanVK FristOneRR Android ARM64 Build (V39)
 
 on:
   workflow_dispatch:
@@ -397,30 +397,23 @@ jobs:
           PYPATCH
           sed -n '1,30p' src/panfrost/vulkan/panvk_instance.c
 
-      - name: Fix libdrm device discovery headers for Android
+      - name: Verify PanVK instance excludes host-only DRM header
         working-directory: mesa
         shell: bash
         run: |
           set -euxo pipefail
-          python3 - <<'PYPATCH'
+          python3 - <<'PYCHECK'
           from pathlib import Path
           p = Path("src/panfrost/vulkan/panvk_instance.c")
           s = p.read_text()
-          # The previous workflow stripped xf86drm.h, leaving libdrm's
-          # drmDevice structure and enumeration APIs undeclared. Restore it
-          # as a normal include, not a malformed escaped string.
-          if '#include <xf86drm.h>' not in s:
-              anchor = '#include "util/build_id.h"'
-              if anchor not in s:
-                  raise SystemExit('Expected build_id include anchor missing')
-              s = s.replace(anchor, anchor + '\n#include <xf86drm.h>', 1)
-          if r'\\n' in s:
-              raise SystemExit('Malformed escaped newline remains in panvk_instance.c')
-          if s.count('#include <xf86drm.h>') != 1:
-              raise SystemExit('xf86drm.h include count verification failed')
-          p.write_text(s)
-          print('Restored xf86drm.h declaration header')
-          PYPATCH
+          if "#include <xf86drm.h>" in s:
+              raise SystemExit("Host-only xf86drm.h include remains in panvk_instance.c")
+          if '#include "util/build_id.h"' not in s:
+              raise SystemExit("build_id include missing")
+          if r"\n" in s:
+              raise SystemExit("Malformed literal escaped newline detected")
+          print("Verified: panvk_instance.c does not include host libdrm header")
+          PYCHECK
           sed -n '1,35p' src/panfrost/vulkan/panvk_instance.c
 
       - name: Configure Android PanVK build
@@ -504,6 +497,17 @@ jobs:
             'Not validated on Infinix X689 / Mali-G52 MC2. Keep the original driver for rollback.' \
             > ../PanVK-Android-ARM64/README-TESTING.txt
 
+      - name: Build artifact diagnostics
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+          DRIVER="$(find build-android -type f -name 'libvulkan_panfrost.so' -print -quit)"
+          test -n "$DRIVER"
+          readelf -h "$DRIVER"
+          readelf -d "$DRIVER" || true
+          sha256sum "$DRIVER"
+
       - name: Package driver
         run: |
           set -euxo pipefail
@@ -512,6 +516,6 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-FristOneRR-Android-ARM64
+          name: PanVK-FristOneRR-Android-ARM64-V39
           path: PanVK-FristOneRR-Android-ARM64.zip
           if-no-files-found: error
