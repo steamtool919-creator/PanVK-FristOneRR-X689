@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V25)
+name: PanVK FristOneRR Android ARM64 Build (V26)
 
 on:
   workflow_dispatch:
@@ -82,6 +82,35 @@ jobs:
       # PanVK needs build-machine tools during cross compilation.
       # Build those tools natively first, so the Android build does not try
       # to link Ubuntu's x86_64 LLVM libraries into an Android ARM64 binary.
+      - name: Make generic Pan KMD header Android-safe
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PYPATCH'
+          from pathlib import Path
+          import re
+          p = Path("src/panfrost/lib/kmod/pan_kmod.h")
+          s = p.read_text()
+          if "#include <xf86drm.h>" not in s:
+              raise SystemExit("Expected xf86drm.h include not found")
+          s = s.replace("#include <xf86drm.h>", "#ifndef __ANDROID__\n#include <xf86drm.h>\n#else\n#include <sys/ioctl.h>\n#include <errno.h>\n#endif", 1)
+          pattern = r"#define pan_kmod_ioctl\(fd, op, arg\).*?^   \}\)"
+          match = re.search(pattern, s, re.M | re.S)
+          if not match:
+              raise SystemExit("Expected pan_kmod_ioctl macro not found")
+          old_macro = match.group(0)
+          new_macro = "#ifdef __ANDROID__\n#define pan_kmod_ioctl(fd, op, arg) ioctl(fd, op, arg)\n#else\n" + old_macro + "\n#endif"
+          s = s[:match.start()] + new_macro + s[match.end():]
+          old = "   } else {\n      if (drmPrimeHandleToFD(bo->dev->fd, bo->handle,\n                             DRM_CLOEXEC | DRM_RDWR, &fd)) {\n         mesa_loge(\"drmPrimeHandleToFD() failed (err=%d)\", errno);\n         return -1;\n      }\n   }"
+          new = "   } else {\n#ifdef __ANDROID__\n      /* Android KBase exports dma-bufs through its backend callback. */\n      errno = ENOTSUP;\n      return -1;\n#else\n      if (drmPrimeHandleToFD(bo->dev->fd, bo->handle,\n                             DRM_CLOEXEC | DRM_RDWR, &fd)) {\n         mesa_loge(\"drmPrimeHandleToFD() failed (err=%d)\", errno);\n         return -1;\n      }\n#endif\n   }"
+          if old not in s:
+              raise SystemExit("Expected DRM BO export fallback not found")
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          print("Android KBase header no longer requires libdrm headers")
+          PYPATCH
+
       - name: Build native PanVK shader tools
         working-directory: mesa
         shell: bash
