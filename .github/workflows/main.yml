@@ -119,6 +119,24 @@ jobs:
           print("Android KBase header no longer requires libdrm headers")
           PYPATCH
 
+      - name: Make PanVK physical device DRM type Android-safe
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PYPATCH'
+          from pathlib import Path
+          p = Path("src/panfrost/vulkan/panvk_physical_device.h")
+          s = p.read_text()
+          marker = "drmDevicePtr drm_device"
+          if marker not in s:
+              raise SystemExit("Expected drmDevicePtr parameter not found")
+          if "typedef struct _drmDevice *drmDevicePtr;" not in s:
+              s = s.replace("#include", "#ifdef __ANDROID__\\ntypedef struct _drmDevice *drmDevicePtr;\\n#endif\\n#include", 1)
+          p.write_text(s)
+          print("Android opaque drmDevicePtr declaration added")
+          PYPATCH
+
       - name: Build native PanVK shader tools
         working-directory: mesa
         shell: bash
