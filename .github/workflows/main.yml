@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V36)
+name: PanVK FristOneRR Android ARM64 Build (V37)
 
 on:
   workflow_dispatch:
@@ -46,6 +46,33 @@ jobs:
       - name: Download FristOneRR source
         run: |
           git clone --depth 1 https://github.com/FristOneRR-Admin/FristOneRR-Panvk-Source.git mesa
+
+      - name: Inspect PanVK DRM discovery source (V37)
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SRC=src/panfrost/vulkan/panvk_instance.c
+          test -f "$SRC"
+          echo "=== DRM discovery references ==="
+          grep -nE 'drmGetDevices2|drmFreeDevices|DRM_NODE_RENDER|DRM_BUS_PLATFORM|drmDevice|drmGetDevice' "$SRC" || true
+          echo "=== Relevant source context ==="
+          python3 - "$SRC" <<'PY'
+          import sys
+          from pathlib import Path
+          lines=Path(sys.argv[1]).read_text().splitlines()
+          keys=('drmGetDevices2','drmFreeDevices','DRM_NODE_RENDER','DRM_BUS_PLATFORM','drmDevice')
+          indexes=[i for i,line in enumerate(lines) if any(k in line for k in keys)]
+          shown=set()
+          for i in indexes:
+              for j in range(max(0,i-8),min(len(lines),i+12)):
+                  if j not in shown:
+                      print(f"{j+1}: {lines[j]}")
+                      shown.add(j)
+              print("---")
+          PY
+          echo "=== Header and source sanity ==="
+          sed -n '1,45p' "$SRC"
 
       - name: Make generic Pan KMD Android-safe
         working-directory: mesa
@@ -372,7 +399,7 @@ jobs:
           EOF
 
 
-      - name: Repair PanVK instance Android include patch
+      - name: Diagnose and repair PanVK instance Android include patch (V37)
         working-directory: mesa
         shell: bash
         run: |
@@ -458,7 +485,17 @@ jobs:
         working-directory: mesa
         run: |
           set -euxo pipefail
+          set +e
           ninja -C build-android -j2
+          BUILD_STATUS=$?
+          set -e
+          if [ "$BUILD_STATUS" -ne 0 ]; then
+            echo "=== Build failure diagnostics ==="
+            ninja -C build-android -t targets | head -150 || true
+            grep -R -nE 'drmGetDevices2|drmFreeDevices|DRM_NODE_RENDER|DRM_BUS_PLATFORM' src/panfrost/vulkan || true
+            find build-android -name meson-log.txt -o -name compile_commands.json
+            exit "$BUILD_STATUS"
+          fi
 
       - name: Locate and verify Vulkan library
         working-directory: mesa
@@ -481,11 +518,21 @@ jobs:
       - name: Package driver
         run: |
           set -euxo pipefail
-          zip -r PanVK-FristOneRR-Android-ARM64.zip PanVK-Android-ARM64
+          zip -r PanVK-FristOneRR-Android-ARM64-V37.zip PanVK-Android-ARM64
+
+      - name: Upload diagnostic logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PanVK-V37-Diagnostics
+          path: |
+            mesa/build-android/meson-logs/meson-log.txt
+            mesa/build-android/build.ninja
+          if-no-files-found: ignore
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-FristOneRR-Android-ARM64
-          path: PanVK-FristOneRR-Android-ARM64.zip
+          name: PanVK-FristOneRR-Android-ARM64-V37
+          path: PanVK-FristOneRR-Android-ARM64-V37.zip
           if-no-files-found: error
