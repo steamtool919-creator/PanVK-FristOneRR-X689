@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V24)
+name: PanVK FristOneRR Android ARM64 Build (V25)
 
 on:
   workflow_dispatch:
@@ -46,6 +46,38 @@ jobs:
       - name: Download FristOneRR source
         run: |
           git clone --depth 1 https://github.com/FristOneRR-Admin/FristOneRR-Panvk-Source.git mesa
+
+      - name: Make generic Pan KMD Android-safe
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PYPATCH'
+          from pathlib import Path
+          p = Path("src/panfrost/lib/kmod/pan_kmod.c")
+          s = p.read_text()
+          s = s.replace("#include <xf86drm.h>", "#ifndef __ANDROID__\n#include <xf86drm.h>\n#endif", 1)
+          start = s.index("   drmVersionPtr version = drmGetVersion(fd);")
+          end = s.index("   return dev;", start) + len("   return dev;")
+          block = s[start:end]
+          s = s[:start] + "#ifdef __ANDROID__\n   (void)fd; (void)flags; (void)allocator;\n   errno = ENOTSUP;\n   return NULL;\n#else\n" + block + "\n#endif" + s[end:]
+          start = s.index("   uint32_t handle;\n   int ret = drmPrimeFDToHandle", s.index("pan_kmod_bo_import"))
+          end = s.index("err_unlock:", start)
+          drmblock = s[start:end]
+          s = s[:start] + "#ifdef __ANDROID__\n   /* KBase uses bo_import_fd above; DRM fallback is Linux-only. */\n   goto err_unlock;\n#else\n" + drmblock + "#endif\n\n" + s[end:]
+          p.write_text(s)
+          p = Path("src/panfrost/lib/kmod/meson.build")
+          s = p.read_text()
+          old = "dependencies: [dep_libdrm, idep_mesautil, idep_pan_packers, libpanfrost_model_dep],"
+          new = "dependencies: (host_machine.system() == 'android' ? [idep_mesautil, idep_pan_packers, libpanfrost_model_dep] : [dep_libdrm, idep_mesautil, idep_pan_packers, libpanfrost_model_dep]),"
+          if old not in s: raise SystemExit("Expected libpankmod dependency list not found")
+          s = s.replace(old, new, 1)
+          old = "  dependencies: [dep_libdrm],"
+          new = "  dependencies: (host_machine.system() == 'android' ? [] : [dep_libdrm]),"
+          if old not in s: raise SystemExit("Expected libpankmod_dep DRM dependency not found")
+          p.write_text(s.replace(old, new, 1))
+          print("Android KBase DRM isolation patch applied")
+          PYPATCH
 
       # PanVK needs build-machine tools during cross compilation.
       # Build those tools natively first, so the Android build does not try
@@ -225,12 +257,7 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          # Ubuntu libdrm-dev installs xf86drm.h at /usr/include/xf86drm.h,
-          # while drm.h and the other DRM UAPI headers are under
-          # /usr/include/libdrm. NDK cross-compilation does not search either
-          # host directory by default, so expose both header locations.
-          c_args = ['-I/usr/include', '-I/usr/include/libdrm']
-          cpp_args = ['-I/usr/include', '-I/usr/include/libdrm']
+          # Never add Ubuntu host headers to the Android NDK sysroot.
 
           [properties]
           needs_exe_wrapper = true
