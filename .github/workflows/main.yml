@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V32)
+name: PanVK FristOneRR Android ARM64 Build (V34)
 
 on:
   workflow_dispatch:
@@ -179,8 +179,12 @@ jobs:
           match = re.search(pattern, s, re.S)
           if not match:
               raise SystemExit("Expected force_sync syncobj block not found; refusing patch")
-          replacement = "#ifndef __ANDROID__\\n" + match.group(0) + "\\n#endif"
+          replacement = "#ifndef __ANDROID__\n" + match.group(0) + "\n#endif"
           s = s[:match.start()] + replacement + s[match.end():]
+          if "\\n" in s:
+              raise SystemExit("Detected literal escaped-newline corruption; refusing patched source")
+          if "#ifndef __ANDROID__" not in s or "#endif" not in s:
+              raise SystemExit("Android guard verification failed")
           p.write_text(s)
           print("Guarded DRM syncobj wait/reset block for Android")
           PYPATCH
