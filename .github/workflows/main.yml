@@ -70,12 +70,30 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          mapfile -t MESON_OPTIONS < <(grep -vE '^[[:space:]]*(#|$)' tools/fristonerr/build-options.txt)
-          meson setup build-android \
-            --cross-file android-cross-github.txt \
-            "${MESON_OPTIONS[@]}" \
-            -Dplatform-sdk-version=30 \
-            -Dmesa-clc=auto \
+
+          python3 - <<'PY'
+          import shlex
+          from pathlib import Path
+
+          raw = Path("tools/fristonerr/build-options.txt").read_text()
+          args = shlex.split(raw)
+          filtered = [
+              arg for arg in args
+              if not arg.startswith((
+                  "-Dmesa-clc=",
+                  "-Dprecomp-compiler=",
+                  "-Dplatform-sdk-version=",
+              ))
+          ]
+          Path("meson-options.txt").write_text("\\n".join(filtered))
+          PY
+
+          mapfile -t MESON_OPTIONS < meson-options.txt
+          meson setup build-android \\
+            --cross-file android-cross-github.txt \\
+            "${MESON_OPTIONS[@]}" \\
+            -Dplatform-sdk-version=30 \\
+            -Dmesa-clc=auto \\
             -Dprecomp-compiler=auto
 
       - name: Compile PanVK
