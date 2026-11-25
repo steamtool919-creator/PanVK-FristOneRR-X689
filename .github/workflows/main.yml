@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V22)
+name: PanVK FristOneRR Android ARM64 Build (V24)
 
 on:
   workflow_dispatch:
@@ -25,6 +25,10 @@ jobs:
             libvulkan-dev libclang-18-dev clang-18 llvm-18-dev llvm-18-tools lld \
             libclc-18-dev libllvmspirvlib-18-dev \
             glslang-tools spirv-tools zlib1g-dev rustc cargo
+          echo "Checking libdrm development headers"
+          dpkg -L libdrm-dev | grep -E '/(xf86drm\.h|drm\.h)$'
+          test -f /usr/include/xf86drm.h
+          test -f /usr/include/libdrm/drm.h
 
       - name: Install Meson
         run: |
@@ -221,10 +225,12 @@ jobs:
           endian = 'little'
 
           [built-in options]
-          # pan_kmod.c uses libdrm's public headers; Debian's libdrm-dev
-          # installs xf86drm.h and drm.h under this include directory.
-          c_args = ['-I/usr/include/libdrm']
-          cpp_args = ['-I/usr/include/libdrm']
+          # Ubuntu libdrm-dev installs xf86drm.h at /usr/include/xf86drm.h,
+          # while drm.h and the other DRM UAPI headers are under
+          # /usr/include/libdrm. NDK cross-compilation does not search either
+          # host directory by default, so expose both header locations.
+          c_args = ['-I/usr/include', '-I/usr/include/libdrm']
+          cpp_args = ['-I/usr/include', '-I/usr/include/libdrm']
 
           [properties]
           needs_exe_wrapper = true
