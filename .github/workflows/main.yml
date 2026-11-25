@@ -230,6 +230,7 @@ jobs:
             -Dtools=[] \
             -Dmesa-clc=system \
             -Dprecomp-compiler=system \
+            -Dzstd=disabled \
             -Dllvm=disabled \
             -Ddraw-use-llvm=false \
             -Damd-use-llvm=false \
