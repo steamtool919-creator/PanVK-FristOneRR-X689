@@ -8,23 +8,23 @@ permissions:
 
 jobs:
   build-panvk:
-    name: Build PanVK Android ARM64
+    name: Build PanVK for Android ARM64 (KBase)
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 240
 
     steps:
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git wget unzip zip file \
-            build-essential python3 python3-pip python3-mako python3-yaml \
+            git wget unzip zip file build-essential \
+            python3 python3-pip python3-mako python3-yaml \
             ninja-build pkg-config bison flex cmake \
             libdrm-dev libelf-dev libexpat1-dev libwayland-dev \
             libx11-dev libxext-dev libxrandr-dev libxcb1-dev \
             libvulkan-dev libclang-18-dev clang-18 llvm-18-dev llvm-18-tools lld \
-            glslang-tools spirv-tools zlib1g-dev rustc cargo \
-            libclc-18-dev
+            libclc-18-dev libllvmspirvlib-18-dev \
+            glslang-tools spirv-tools zlib1g-dev rustc cargo
 
       - name: Install Meson
         run: |
@@ -36,15 +36,6 @@ jobs:
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r29-linux.zip
           unzip -q android-ndk-r29-linux.zip
-          # Keep Android NDK tools available, but force Meson to use Ubuntu's
-          # native LLVM 18 config tool rather than the NDK's llvm-config.
-          mkdir -p "$HOME/native-llvm-bin"
-          cat > "$HOME/native-llvm-bin/llvm-config" <<'EOF'
-          #!/usr/bin/env bash
-          exec /usr/bin/llvm-config-18 "$@"
-          EOF
-          chmod +x "$HOME/native-llvm-bin/llvm-config"
-          echo "$HOME/native-llvm-bin" >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
           echo "ANDROID_NDK_ROOT=$GITHUB_WORKSPACE/android-ndk-r29" >> "$GITHUB_ENV"
 
@@ -52,14 +43,60 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/FristOneRR-Admin/FristOneRR-Panvk-Source.git mesa
 
+      # PanVK needs build-machine tools during cross compilation.
+      # Build those tools natively first, so the Android build does not try
+      # to link Ubuntu's x86_64 LLVM libraries into an Android ARM64 binary.
+      - name: Build native PanVK shader tools
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          meson setup build-native \
+            --native-file /dev/null \
+            -Dplatforms=x11 \
+            -Dgallium-drivers=[] \
+            -Dvulkan-drivers=panfrost \
+            -Dpanfrost-kmds=kbase \
+            -Dtools=panfrost \
+            -Dmesa-clc=enabled \
+            -Dprecomp-compiler=enabled \
+            -Dllvm=enabled \
+            -Dshared-llvm=enabled \
+            -Ddraw-use-llvm=false \
+            -Damd-use-llvm=false \
+            -Dllvm-orcjit=false \
+            -Dbuild-tests=false \
+            -Dbuildtype=release \
+            -Dglx=disabled \
+            -Degl=disabled \
+            -Dgbm=disabled
+
+          ninja -C build-native -j2
+
+          mkdir -p "$HOME/panvk-native-tools"
+          for tool in mesa_clc vtn_bindgen2 panfrost_compile; do
+            found="$(find build-native -type f -name "$tool" -perm -111 -print -quit)"
+            if [ -z "$found" ]; then
+              echo "ERROR: native build tool not found: $tool"
+              find build-native -type f -perm -111 | grep -E 'mesa_clc|vtn_bindgen2|panfrost_compile' || true
+              exit 1
+            fi
+            cp "$found" "$HOME/panvk-native-tools/$tool"
+          done
+          chmod +x "$HOME/panvk-native-tools/"*
+          echo "$HOME/panvk-native-tools" >> "$GITHUB_PATH"
+
       - name: Prepare Android cross file
         working-directory: mesa
+        shell: bash
         run: |
+          set -euxo pipefail
           NDK="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
           cat > android-cross-github.txt <<EOF
           [binaries]
-          c = ['$NDK/aarch64-linux-android30-clang', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables']
-          cpp = ['$NDK/aarch64-linux-android30-clang++', '-fno-exceptions', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables', '-static-libstdc++']
+          c = ['$NDK/aarch64-linux-android30-clang']
+          cpp = ['$NDK/aarch64-linux-android30-clang++']
           ar = '$NDK/llvm-ar'
           strip = '$NDK/llvm-strip'
           pkg-config = '/usr/bin/pkg-config'
@@ -72,75 +109,46 @@ jobs:
 
           [properties]
           needs_exe_wrapper = true
-          platform-sdk-version = '30'
+          platform-sdk-version = 30
           EOF
 
-      - name: Configure Android build
+      - name: Configure Android PanVK build
         working-directory: mesa
         shell: bash
         run: |
           set -euxo pipefail
 
-          pkg-config --modversion libclc || {
-            echo "libclc pkg-config metadata is missing; inspect installed libclc packages."
-            find /usr -iname '*libclc*.pc' -o -iname '*clc*.pc' 2>/dev/null | head -50
-            exit 1
-          }
+          # Confirm the native tools are available to Meson.
+          command -v mesa_clc
+          command -v vtn_bindgen2
+          command -v panfrost_compile
 
-          test -x "$HOME/native-llvm-bin/llvm-config"
-          test "$("$HOME/native-llvm-bin/llvm-config" --version | cut -d. -f1)" = "18"
-          "$HOME/native-llvm-bin/llvm-config" --version
-          "$HOME/native-llvm-bin/llvm-config" --libdir
-          "$HOME/native-llvm-bin/llvm-config" --includedir
-
-          python3 - <<'PY'
-          import shlex
-          from pathlib import Path
-
-          raw = Path("tools/fristonerr/build-options.txt").read_text()
-          args = shlex.split(raw)
-          # Drop source preset entries for unrelated Windows, AMD, Intel,
-          # Freedreno, and x86-only build targets. Keep the Panfrost kbase
-          # target and the Android platform settings.
-          irrelevant_prefixes = (
-              "-Dmesa-clc=",
-              "-Dprecomp-compiler=",
-              "-Dplatform-sdk-version=",
-              "-Dsplit-debug=",
-              "-Damd-use-llvm=",
-              "-Dintel-elk=",
-              "-Dsse2=",
-              "-Dfreedreno-kmds=",
-              "-Dgallium-wgl-dll-name=",
-              "-Dgallium-d3d10-dll-name=",
-              "-Dmediafoundation-",
-              "-Dgallium-mediafoundation-",
-              "-Dgallium-d3d10umd=",
-              "-Dmin-windows-version=",
-              "-Dradv-",
-              "-Dbuild-radv-",
-              "-Dbuild-aco-",
-              "-Dinstall-intel-",
-          )
-          filtered = [
-              arg for arg in args
-              if not arg.startswith(irrelevant_prefixes)
-          ]
-          Path("meson-options.txt").write_text("\n".join(filtered))
-          PY
-
-          mapfile -t MESON_OPTIONS < meson-options.txt
           meson setup build-android \
             --cross-file android-cross-github.txt \
-            "${MESON_OPTIONS[@]}" \
-            -Dplatform-sdk-version=30 \
+            -Dplatforms=android \
+            -Dandroid-stub=true \
+            -Dandroid-strict=true \
+            -Dgallium-drivers=[] \
+            -Dvulkan-drivers=panfrost \
+            -Dpanfrost-kmds=kbase \
+            -Dtools=[] \
+            -Dmesa-clc=system \
+            -Dprecomp-compiler=system \
+            -Dllvm=disabled \
             -Ddraw-use-llvm=false \
-            -Dmesa-clc=auto \
-            -Dprecomp-compiler=auto
+            -Damd-use-llvm=false \
+            -Dllvm-orcjit=false \
+            -Dbuild-tests=false \
+            -Dbuildtype=release \
+            -Dopengl=false \
+            -Dglx=disabled \
+            -Degl=disabled \
+            -Dgbm=disabled
 
-      - name: Compile PanVK
+      - name: Compile Android PanVK
         working-directory: mesa
         run: |
+          set -euxo pipefail
           ninja -C build-android -j2
 
       - name: Locate and verify Vulkan library
@@ -156,10 +164,14 @@ jobs:
           cp "$DRIVER" ../PanVK-Android-ARM64/
           cp LICENSE ../PanVK-Android-ARM64/
           cp tools/fristonerr/build-options.txt ../PanVK-Android-ARM64/
-          printf '%s\n' 'Experimental build. Not validated on Infinix X689 / Mali-G52 MC2. Keep original driver for rollback.' > ../PanVK-Android-ARM64/README-TESTING.txt
+          printf '%s\n' \
+            'Experimental PanVK build for Android ARM64 / Panfrost KBase.' \
+            'Not validated on Infinix X689 / Mali-G52 MC2. Keep the original driver for rollback.' \
+            > ../PanVK-Android-ARM64/README-TESTING.txt
 
       - name: Package driver
         run: |
+          set -euxo pipefail
           zip -r PanVK-FristOneRR-Android-ARM64.zip PanVK-Android-ARM64
 
       - name: Upload build artifact
