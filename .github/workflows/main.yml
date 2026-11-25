@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V39)
+name: PanVK FristOneRR Android ARM64 Build (V40 - DRM/KBase enumeration fix)
 
 on:
   workflow_dispatch:
@@ -372,7 +372,7 @@ jobs:
           EOF
 
 
-      - name: Repair PanVK instance Android include patch
+      - name: Patch PanVK instance DRM enumeration for Android KBase
         working-directory: mesa
         shell: bash
         run: |
@@ -381,40 +381,40 @@ jobs:
           from pathlib import Path
           p = Path("src/panfrost/vulkan/panvk_instance.c")
           s = p.read_text()
-          # Repair the malformed literal escape inserted by the previous workflow.
-          malformed = r'#include <xf86drm.h>\\n#include "util/build_id.h"'
-          if malformed in s:
-              s = s.replace(malformed, '#include "util/build_id.h"', 1)
-          # Remove any standalone host libdrm header added by this workflow.
-          s = s.replace("#include <xf86drm.h>\\n", "")
-          s = s.replace("#include <xf86drm.h>", "")
-          if r"\\n" in s:
-              raise SystemExit("Unexpected literal \\n sequence remains in panvk_instance.c")
-          if '#include "util/build_id.h"' not in s:
-              raise SystemExit('util/build_id.h include missing after repair; refusing to continue')
+          # Android KBase nodes are enumerated below via /dev/mali*. The DRM
+          # enumeration path is Linux/libdrm-only and is excluded on Android.
+          if "panvk_physical_device_try_create" not in s or "drmGetDevices2" not in s:
+              raise SystemExit("Expected PanVK DRM enumeration code not found; source mismatch")
+          if "#ifndef __ANDROID__\nstatic VkResult\npanvk_physical_device_try_create" not in s:
+              marker = "static VkResult\npanvk_physical_device_try_create"
+              if marker not in s:
+                  raise SystemExit("DRM helper marker not found")
+              s = s.replace(marker, "#ifndef __ANDROID__\n" + marker, 1)
+              # Close the guard immediately after the helper function.
+              helper_end = "   return VK_SUCCESS;\n}\n\nstatic VkResult\npanvk_enumerate_physical_devices"
+              if helper_end not in s:
+                  raise SystemExit("DRM helper end marker not found")
+              s = s.replace(helper_end, "   return VK_SUCCESS;\n}\n#endif /* !__ANDROID__ */\n\nstatic VkResult\npanvk_enumerate_physical_devices", 1)
+          # Guard the DRM enumeration portion within the shared enumerate routine.
+          drm_start = "   /* Enumerate DRM render nodes (panfrost / panthor). */"
+          kbase_start = "#if defined(HAVE_PAN_KMOD_KBASE)\n   /* Enumerate kbase (Mali) non-DRM nodes. */"
+          if drm_start not in s or kbase_start not in s:
+              raise SystemExit("DRM/KBase enumeration markers not found")
+          if "#ifndef __ANDROID__\n   /* Enumerate DRM render nodes" not in s:
+              a = s.index(drm_start)
+              b = s.index(kbase_start, a)
+              drm_block = s[a:b]
+              s = s[:a] + "#ifndef __ANDROID__\n" + drm_block + "#endif /* !__ANDROID__ */\n\n" + s[b:]
           p.write_text(s)
-          print("Repaired panvk_instance.c include corruption and removed host-only libdrm include")
+          # Verify the Android branch remains present and DRM code is guarded.
+          check = p.read_text()
+          if "#ifndef __ANDROID__\n   /* Enumerate DRM render nodes" not in check:
+              raise SystemExit("DRM enumeration guard verification failed")
+          if "panvk_physical_device_init_kbase(device, instance, path)" not in check:
+              raise SystemExit("KBase enumeration was lost during patch")
+          print("Patched Android PanVK to skip DRM enumeration and retain KBase node discovery")
           PYPATCH
-          sed -n '1,30p' src/panfrost/vulkan/panvk_instance.c
-
-      - name: Verify PanVK instance excludes host-only DRM header
-        working-directory: mesa
-        shell: bash
-        run: |
-          set -euxo pipefail
-          python3 - <<'PYCHECK'
-          from pathlib import Path
-          p = Path("src/panfrost/vulkan/panvk_instance.c")
-          s = p.read_text()
-          if "#include <xf86drm.h>" in s:
-              raise SystemExit("Host-only xf86drm.h include remains in panvk_instance.c")
-          if '#include "util/build_id.h"' not in s:
-              raise SystemExit("build_id include missing")
-          if r"\n" in s:
-              raise SystemExit("Malformed literal escaped newline detected")
-          print("Verified: panvk_instance.c does not include host libdrm header")
-          PYCHECK
-          sed -n '1,35p' src/panfrost/vulkan/panvk_instance.c
+          sed -n '115,225p' src/panfrost/vulkan/panvk_instance.c
 
       - name: Configure Android PanVK build
         working-directory: mesa
@@ -494,7 +494,7 @@ jobs:
           cp tools/fristonerr/build-options.txt ../PanVK-Android-ARM64/
           printf '%s\n' \
             'Experimental PanVK build for Android ARM64 / Panfrost KBase.' \
-            'Not validated on Infinix X689 / Mali-G52 MC2. Keep the original driver for rollback.' \
+            'Experimental build; successful compilation does not prove runtime compatibility. Not validated on Infinix X689 / Mali-G52 MC2. Keep the original driver for rollback.' \
             > ../PanVK-Android-ARM64/README-TESTING.txt
 
       - name: Build artifact diagnostics
@@ -516,6 +516,6 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-FristOneRR-Android-ARM64-V39
+          name: PanVK-FristOneRR-Android-ARM64-V40
           path: PanVK-FristOneRR-Android-ARM64.zip
           if-no-files-found: error
