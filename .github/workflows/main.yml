@@ -52,8 +52,20 @@ jobs:
         run: |
           set -euxo pipefail
 
+          # The Android NDK also ships llvm-config (version 21). It is NOT
+          # the native LLVM development package required for this host build.
+          # Force Meson to use Ubuntu's native LLVM 18 instead.
+          test -x /usr/bin/llvm-config-18
+          sudo ln -sf /usr/bin/llvm-config-18 /usr/local/bin/llvm-config
+          export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+          command -v llvm-config
+          llvm-config --version
+          llvm-config --libdir
+          llvm-config --includedir
+
+          rm -rf build-native
+
           meson setup build-native \
-            --native-file /dev/null \
             -Dplatforms=x11 \
             -Dgallium-drivers=[] \
             -Dvulkan-drivers=panfrost \
