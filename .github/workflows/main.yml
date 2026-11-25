@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V28)
+name: PanVK FristOneRR Android ARM64 Build (V31)
 
 on:
   workflow_dispatch:
@@ -143,6 +143,26 @@ jobs:
           print("Verified Android drmDevicePtr forward declaration")
           PYPATCH
           sed -n '1,18p' src/panfrost/vulkan/panvk_physical_device.h
+
+
+      - name: Remove host-only DRM header from Pan perf
+        working-directory: mesa
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PYPATCH'
+          from pathlib import Path
+          p = Path("src/panfrost/perf/pan_perf.c")
+          s = p.read_text()
+          old = "#include <xf86drm.h>\n"
+          if old not in s:
+              raise SystemExit("Expected xf86drm.h include in pan_perf.c not found")
+          s = s.replace(old, "", 1)
+          if "#include <xf86drm.h>" in s:
+              raise SystemExit("xf86drm.h removal verification failed")
+          p.write_text(s)
+          print("Removed unused host-only libdrm header from pan_perf.c")
+          PYPATCH
 
       - name: Build native PanVK shader tools
         working-directory: mesa
