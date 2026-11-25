@@ -1,4 +1,4 @@
-name: PanVK FristOneRR Android ARM64 Build (V26)
+name: PanVK FristOneRR Android ARM64 Build (V28)
 
 on:
   workflow_dispatch:
@@ -57,23 +57,22 @@ jobs:
           p = Path("src/panfrost/lib/kmod/pan_kmod.c")
           s = p.read_text()
           s = s.replace("#include <xf86drm.h>", "#ifndef __ANDROID__\n#include <xf86drm.h>\n#endif", 1)
-          start = s.index("   drmVersionPtr version = drmGetVersion(fd);")
-          end = s.index("   return dev;", start) + len("   return dev;")
-          block = s[start:end]
-          s = s[:start] + "#ifdef __ANDROID__\n   (void)fd; (void)flags; (void)allocator;\n   errno = ENOTSUP;\n   return NULL;\n#else\n" + block + "\n#endif" + s[end:]
+          start = s.index("pan_kmod_dev_create(int fd, uint32_t flags,")
+          end = s.index("\nvoid\npan_kmod_dev_destroy", start)
+          func = s[start:end]
+          a = func.index("   drmVersionPtr version = drmGetVersion(fd);")
+          b = func.index("   return dev;", a) + len("   return dev;")
+          original = func[a:b]
+          func = func[:a] + "#ifdef __ANDROID__\n   (void)fd; (void)flags; (void)allocator;\n   errno = ENOTSUP;\n   return NULL;\n#else\n" + original + "\n#endif" + func[b:]
+          s = s[:start] + func + s[end:]
           start = s.index("   uint32_t handle;\n   int ret = drmPrimeFDToHandle", s.index("pan_kmod_bo_import"))
-          end = s.index("err_unlock:", start)
+          end = s.index("out_unlock:", start)
           drmblock = s[start:end]
-          s = s[:start] + "#ifdef __ANDROID__\n   /* KBase uses bo_import_fd above; DRM fallback is Linux-only. */\n   goto err_unlock;\n#else\n" + drmblock + "#endif\n\n" + s[end:]
-          # Make out_unlock shared by the Android KBase import path and Linux DRM fallback.
-          # The label was previously inside a fallback section excluded on Android.
-          if "out_unlock:\n   simple_mtx_unlock" not in s:
-              raise SystemExit("Expected out_unlock label/unlock block not found")
-          s = s.replace("out_unlock:\n   simple_mtx_unlock", "simple_mtx_unlock", 1)
-          marker = "   simple_mtx_unlock(&dev->handle_to_bo.lock);\n\n   return bo;"
-          if marker not in s:
-              raise SystemExit("Expected common unlock/return block not found")
-          s = s.replace(marker, "out_unlock:\n" + marker, 1)
+          s = s[:start] + "#ifdef __ANDROID__\n   /* Android must use the KBase bo_import_fd callback. */\n   errno = ENOTSUP;\n   goto err_unlock;\n#else\n" + drmblock + "#endif\n\n" + s[end:]
+          # The close-handle cleanup is Linux/libdrm-only; the common unlock label remains visible.
+          start = s.index("err_close_handle:", s.index("pan_kmod_bo_import"))
+          end = s.index("err_unlock:", start)
+          s = s[:start] + "#ifndef __ANDROID__\n" + s[start:end] + "#endif\n\n" + s[end:]
           p.write_text(s)
           p = Path("src/panfrost/lib/kmod/meson.build")
           s = p.read_text()
